@@ -11,9 +11,12 @@ repository = "https://github.com/qdrant/fastembed"
 keywords = ["vector", "embedding", "neural", "search", "qdrant", "sentence-transformers"]
 
 [tool.poetry.dependencies]
-python = ">=3.8.0,<3.13"
+python = ">=3.8.0"
 onnx = "^1.15.0"
-onnxruntime = ">=1.17.0,<1.20.0"
+onnxruntime = [
+    { version = ">=1.17.0,<1.20.0", python = "<3.13"},
+    { version = ">1.20.0", python = ">=3.13"}
+]
 tqdm = "^4.66"
 requests = "^2.31"
 tokenizers = ">=0.15,<1.0"

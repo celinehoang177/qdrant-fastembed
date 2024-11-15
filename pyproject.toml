@@ -13,16 +13,10 @@ keywords = ["vector", "embedding", "neural", "search", "qdrant", "sentence-trans
 [tool.poetry.dependencies]
 python = ">=3.8.0"
 onnx = "^1.15.0"
-numpy = [
-    { version = "<1.21", python = "<3.8" },
-    { version = ">=1.21", python = ">=3.8,<3.12" },
-    { version = ">=1.26", python = ">=3.12" }
-]
 onnxruntime = [
     { version = ">=1.17.0,<1.20.0", python = "<3.13"},
     { version = ">1.20.0", python = ">=3.13"}
 ]
-onnxruntime = ">=1.17.0,<1.20.0"
 tqdm = "^4.66"
 requests = "^2.31"
 tokenizers = ">=0.15,<1.0"

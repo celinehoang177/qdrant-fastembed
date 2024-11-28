@@ -75,6 +75,17 @@ supported_pooled_normalized_models = [
         "sources": {"hf": "jinaai/jina-embeddings-v2-base-es"},
         "model_file": "onnx/model.onnx",
     },
+    {
+        "model": "jinaai/jina-clip-v1",
+        "dim": 768,
+        "description": "Text embeddings, Multimodal (text&image), English, Prefixes for queries/documents: not necessary, 2024 year",
+        "license": "apache-2.0",
+        "size_in_GB": 0.55,
+        "sources": {
+            "hf": "jinaai/jina-clip-v1",
+        },
+        "model_file": "onnx/text_model.onnx",
+    },
 ]
 
 

@@ -1,4 +1,4 @@
-from typing import Any, Union
+from typing import Any, Union, Optional
 
 import numpy as np
 from PIL import Image
@@ -10,6 +10,7 @@ from fastembed.image.transform.functional import (
     pil2ndarray,
     rescale,
     resize,
+    pad2square,
 )
 
 
@@ -37,7 +38,9 @@ class Normalize(Transform):
         self.std = std
 
     def __call__(self, images: list[np.ndarray]) -> list[np.ndarray]:
-        return [normalize(image, mean=self.mean, std=self.std) for image in images]
+        return [
+            normalize(image, mean=np.array(self.mean), std=np.array(self.std)) for image in images
+        ]
 
 
 class Resize(Transform):
@@ -66,6 +69,21 @@ class PILtoNDarray(Transform):
         return [pil2ndarray(image) for image in images]
 
 
+class PadtoSquare(Transform):
+    def __init__(
+        self,
+        size: int,
+        fill_color: Optional[Union[str, int, tuple[int, ...]]] = None,
+    ):
+        self.size = size
+        self.fill_color = fill_color
+
+    def __call__(self, images: list[Image.Image]) -> list[Image.Image]:
+        return [
+            pad2square(image=image, size=self.size, fill_color=self.fill_color) for image in images
+        ]
+
+
 class Compose:
     def __init__(self, transforms: list[Transform]):
         self.transforms = transforms
@@ -85,14 +103,20 @@ class Compose:
 
                 Valid keys:
                     - do_resize
+                    - resize_mode
                     - size
+                    - fill_color
                     - do_center_crop
                     - crop_size
                     - do_rescale
                     - rescale_factor
                     - do_normalize
                     - image_mean
+                    - mean
                     - image_std
+                    - std
+                    - resample
+                    - interpolation
                 Valid size keys (nested):
                     - {"height", "width"}
                     - {"shortest_edge"}
@@ -103,6 +127,7 @@ class Compose:
         transforms = []
         cls._get_convert_to_rgb(transforms, config)
         cls._get_resize(transforms, config)
+        cls._get_pad2square(transforms, config)
         cls._get_center_crop(transforms, config)
         cls._get_pil2ndarray(transforms, config)
         cls._get_rescale(transforms, config)
@@ -157,6 +182,23 @@ class Compose:
                         resample=config.get("resample", Image.Resampling.BICUBIC),
                     )
                 )
+        elif mode == "JinaCLIPImageProcessor":
+            resample = (
+                Compose._interpolation_resolver(config.get("interpolation"))
+                if isinstance(config.get("interpolation"), str)
+                else config.get("interpolation", Image.Resampling.BICUBIC)
+            )
+            if "size" in config:
+                resize_mode = config.get("resize_mode", "shortest")
+                if resize_mode == "shortest":
+                    transforms.append(
+                        Resize(
+                            size=config["size"],
+                            resample=resample,
+                        )
+                    )
+        else:
+            raise ValueError(f"Preprocessor {mode} is not supported")
 
     @staticmethod
     def _get_center_crop(transforms: list[Transform], config: dict[str, Any]):
@@ -172,6 +214,8 @@ class Compose:
                     raise ValueError(f"Invalid crop size: {crop_size}")
                 transforms.append(CenterCrop(size=crop_size))
         elif mode == "ConvNextFeatureExtractor":
+            pass
+        elif mode == "JinaCLIPImageProcessor":
             pass
         else:
             raise ValueError(f"Preprocessor {mode} is not supported")
@@ -190,3 +234,36 @@ class Compose:
     def _get_normalize(transforms: list[Transform], config: dict[str, Any]):
         if config.get("do_normalize", False):
             transforms.append(Normalize(mean=config["image_mean"], std=config["image_std"]))
+        elif "mean" in config and "std" in config:
+            transforms.append(Normalize(mean=config["mean"], std=config["std"]))
+
+    @staticmethod
+    def _get_pad2square(transforms: list[Transform], config: dict[str, Any]):
+        mode = config.get("image_processor_type", "CLIPImageProcessor")
+        if mode == "CLIPImageProcessor":
+            pass
+        elif mode == "ConvNextFeatureExtractor":
+            pass
+        elif mode == "JinaCLIPImageProcessor":
+            transforms.append(
+                PadtoSquare(
+                    size=config["size"],
+                    fill_color=config.get("fill_color", 0),
+                )
+            )
+
+    @staticmethod
+    def _interpolation_resolver(resample: Optional[str] = None) -> Image.Resampling:
+        interpolation_map = {
+            "nearest": Image.Resampling.NEAREST,
+            "lanczos": Image.Resampling.LANCZOS,
+            "bilinear": Image.Resampling.BILINEAR,
+            "bicubic": Image.Resampling.BICUBIC,
+            "box": Image.Resampling.BOX,
+            "hamming": Image.Resampling.HAMMING,
+        }
+
+        if resample and (method := interpolation_map.get(resample.lower())):
+            return method
+
+        raise ValueError(f"Unknown interpolation method: {resample}")

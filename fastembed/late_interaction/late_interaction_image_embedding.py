@@ -3,13 +3,14 @@ from typing import Any, Iterable, Optional, Sequence, Type, Union
 import numpy as np
 
 from fastembed.common import OnnxProvider
+from fastembed.common.types import ImageInput
 from fastembed.late_interaction.colpali import ColPali
 from fastembed.late_interaction.late_interaction_image_embedding_base import (
     LateInteractionImageEmbeddingBase,
 )
 
 
-class LateInteractionTextEmbedding(LateInteractionImageEmbeddingBase):
+class LateInteractionImageEmbedding(LateInteractionImageEmbeddingBase):
     EMBEDDINGS_REGISTRY: list[Type[LateInteractionImageEmbeddingBase]] = [ColPali]
 
     @classmethod
@@ -24,14 +25,18 @@ class LateInteractionTextEmbedding(LateInteractionImageEmbeddingBase):
                 ```
                 [
                     {
-                        "model": "colbert-ir/colbertv2.0",
-                        "dim": 128,
-                        "description": "Late interaction model",
+                        "model": "akshayballal/colpali-v1.2-merged",
+                        "dim": (16, 128),
+                        "description": "Text embeddings, Unimodal (text), Aligned to image latent space, ColBERT-compatible, 512 tokens max, 2024.",
                         "license": "mit",
-                        "size_in_GB": 0.44,
-                        "sources": {
-                            "hf": "colbert-ir/colbertv2.0",
-                        },
+                        "size_in_GB": 6.08,
+                        "sources": {"hf": "akshayballal/colpali-v1.2-merged-onnx",},
+                        "additional_files": [
+                            "model.onnx_data",
+                            "tokenizer.json",
+                            "tokenizer_config.json",
+                            "config.json",
+                        ],
                         "model_file": "model.onnx",
                     },
                 ]
@@ -70,14 +75,14 @@ class LateInteractionTextEmbedding(LateInteractionImageEmbeddingBase):
                 return
 
         raise ValueError(
-            f"Model {model_name} is not supported in LateInteractionTextEmbedding."
-            "Please check the supported models using `LateInteractionTextEmbedding.list_supported_models()`"
+            f"Model {model_name} is not supported in LateInteractionImageEmbedding."
+            "Please check the supported models using `LateInteractionImageEmbedding.list_supported_models()`"
         )
 
     def embed(
         self,
-        documents: Union[str, Iterable[str]],
-        batch_size: int = 256,
+        images: ImageInput,
+        batch_size: int = 16,
         parallel: Optional[int] = None,
         **kwargs,
     ) -> Iterable[np.ndarray]:
@@ -86,7 +91,7 @@ class LateInteractionTextEmbedding(LateInteractionImageEmbeddingBase):
         We use mean pooling with attention so that the model can handle variable-length inputs.
 
         Args:
-            documents: Iterator of documents or single document to embed
+            images: Iterator of image paths or single image path to embed
             batch_size: Batch size for encoding -- higher values will use more memory, but be faster
             parallel:
                 If > 1, data-parallel encoding will be used, recommended for offline encoding of large datasets.
@@ -96,7 +101,7 @@ class LateInteractionTextEmbedding(LateInteractionImageEmbeddingBase):
         Returns:
             List of embeddings, one per document
         """
-        yield from self.model.embed(documents, batch_size, parallel, **kwargs)
+        yield from self.model.embed(images, batch_size, parallel, **kwargs)
 
     def query_embed(self, query: Union[str, Iterable[str]], **kwargs) -> Iterable[np.ndarray]:
         """

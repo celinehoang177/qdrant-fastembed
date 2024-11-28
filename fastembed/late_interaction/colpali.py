@@ -36,16 +36,12 @@ supported_colpali_models = [
 ]
 
 
-class ColPali(
-    LateInteractionImageEmbeddingBase, OnnxTextModel[np.ndarray], OnnxImageModel[np.array]
-):
-    DOCUMENT_MARKER_TOKEN_ID = 2
-
+class ColPali(LateInteractionImageEmbeddingBase, OnnxTextModel[np.ndarray], OnnxImageModel[np.array]):
     QUERY_PREFIX = "Query: "
     BOS_TOKEN = "<s>"
     PAD_TOKEN = "<pad>"
-    QUERY_MARKER_TOKEN_ID = [2, 9413]
-    image_placeholder_size = (3, 448, 448)
+    QUERY_MARKER_TOKEN_IDS = [2, 9413]
+    IMAGE_PLACEHOLDER_SIZE = (3, 448, 448)
     EMPTY_TEXT_PLACEHOLDER = np.array([257152] * 1024 + [2, 50721, 573, 2416, 235265, 108])
     EVEN_ATTENTION_MASK = np.array([1] * 1030)
 
@@ -56,23 +52,14 @@ class ColPali(
         return output.model_output.astype(np.float32)
 
     def _preprocess_image_input(
-        self, onnx_input: dict[str, np.ndarray], is_doc: bool = True, **kwargs: Any
+        self, onnx_input: dict[str, np.ndarray], **kwargs: Any
     ) -> dict[str, np.ndarray]:
-        if is_doc:
-            onnx_input["input_ids"] = np.array(
-                [self.EMPTY_TEXT_PLACEHOLDER for _ in onnx_input["input_ids"]]
-            )
-            onnx_input["attention_mask"] = np.array(
-                [self.EVEN_ATTENTION_MASK for _ in onnx_input["input_ids"]]
-            )
-            return onnx_input
-        else:
-            empty_image_placeholder = np.zeros(self.image_placeholder_size, dtype=np.float32)
-            onnx_input["pixel_values"] = np.array(
-                [empty_image_placeholder for _ in onnx_input["input_ids"]]
-            )
-            onnx_input["attention_mask"] = np.array([[1] for _ in onnx_input["input_ids"]])
-            return onnx_input
+        empty_image_placeholder = np.zeros(self.IMAGE_PLACEHOLDER_SIZE, dtype=np.float32)
+        onnx_input["pixel_values"] = np.array(
+            [empty_image_placeholder for _ in onnx_input["input_ids"]]
+        )
+        onnx_input["attention_mask"] = np.array([[1] for _ in onnx_input["input_ids"]])
+        return onnx_input
 
     @classmethod
     def list_supported_models(cls) -> list[dict[str, Any]]:
@@ -87,7 +74,7 @@ class ColPali(
         texts_query: list[str] = []
 
         for query in documents:
-            query = self.bos_token + self.query_prefix + query + self.pad_token * 10
+            query = self.BOS_TOKEN + self.QUERY_PREFIX + query + self.PAD_TOKEN * 10
             query += "\n"
 
             texts_query.append(query)
@@ -98,12 +85,12 @@ class ColPali(
     ) -> dict[str, np.ndarray]:
         documents = self._preprocess_queries(inputs)
         encoded = self.tokenize(documents, **kwargs)
-        input_ids = np.array([self.query_tokens + e.ids[2:] for e in encoded])
+        input_ids = np.array([self.QUERY_MARKER_TOKEN_IDS + e.ids[2:] for e in encoded])
 
         attention_mask = np.array([e.attention_mask for e in encoded])
         onnx_input = {"input_ids": np.array(input_ids, dtype=np.int64)}
-        onnx_input = self._preprocess_onnx_input(onnx_input, **kwargs)
         onnx_input["attention_mask"] = attention_mask
+        onnx_input["pixel_values"] = np.zeros((1, 3, 448, 448), dtype=np.float32) # TODO: this is dummy just to check if it will work with query only without image
         return onnx_input
 
     def _preprocess_images_input(
@@ -119,7 +106,7 @@ class ColPali(
             onnx_input = self._preprocess_image_input(onnx_input, **kwargs)
             return onnx_input
 
-    def embed(
+    def onnx_embed(
         self,
         inputs: list[Union[str, Image.Image]],
         is_doc: bool = False,
@@ -129,7 +116,7 @@ class ColPali(
             onnx_input = self._preprocess_query_input(inputs, **kwargs)
         else:
             onnx_input = self._preprocess_images_input(inputs, **kwargs)
-
+        onnx_input = self._preprocess_onnx_input(onnx_input, **kwargs)
         model_output = self.model.run(self.ONNX_OUTPUT_NAMES, onnx_input)
         return OnnxOutputContext(
             model_output=model_output[0],
@@ -164,10 +151,9 @@ class ColPali(
             self.device_id = self.device_ids[0]
         else:
             self.device_id = None
-        self.load_onnx_model()
-        self.processor = load_preprocessor(model_dir=self._model_dir)
+        if not lazy_load:
+            self.load_onnx_model()
 
-        # self.tokenizer.enable_truncation(max_length=10000)
 
     def load_onnx_model(self) -> None:
         """
@@ -181,6 +167,52 @@ class ColPali(
             cuda=self.cuda,
             device_id=self.device_id,
         )
+        self.processor = load_preprocessor(model_dir=self._model_dir)
+        # TODO: self.tokenizer.enable_truncation(max_length=10000)
+
+    def embed(
+        self,
+        images: ImageInput,
+        batch_size: int = 16,
+        parallel: Optional[int] = None,
+        **kwargs,
+    ) -> Iterable[np.ndarray]:
+        """
+        Encode a list of images into list of embeddings.
+        We use mean pooling with attention so that the model can handle variable-length inputs.
+
+        Args:
+            images: Iterator of image paths or single image path to embed
+            batch_size: Batch size for encoding -- higher values will use more memory, but be faster
+            parallel:
+                If > 1, data-parallel encoding will be used, recommended for offline encoding of large datasets.
+                If 0, use all available cores.
+                If None, don't use data-parallel processing, use default onnxruntime threading instead.
+
+        Returns:
+            List of embeddings, one per document
+        """
+        yield from self._embed_images(
+            model_name=self.model_name,
+            cache_dir=str(self.cache_dir),
+            images=images,
+            batch_size=batch_size,
+            parallel=parallel,
+            providers=self.providers,
+            cuda=self.cuda,
+            device_ids=self.device_ids,
+            **kwargs,
+        )
+    
+    def query_embed(self, query: Union[str, Iterable[str]], **kwargs) -> Iterable[np.ndarray]:
+        if isinstance(query, str):
+            query = [query]
+
+        if not hasattr(self, "model") or self.model is None:
+            self.load_onnx_model()
+
+        for text in query:
+            yield from self._post_process_onnx_output(self.onnx_embed([text], is_doc=True))
 
 
 class ColPaliEmbeddingWorker(TextEmbeddingWorker):
